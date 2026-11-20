@@ -1090,9 +1090,11 @@ fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
         return Err("HEX inválido: número ímpar de dígitos (cada byte usa 2, ex.: 0A)".into());
     }
     let nibble = |d: u8| char::from(d).to_digit(16).unwrap_or(0) as u8;
-    Ok(digits
-        .chunks_exact(2)
-        .map(|pair| nibble(pair[0]) << 4 | nibble(pair[1]))
+    // Já validado acima: número par de dígitos, então não sobra resto.
+    let (pairs, _) = digits.as_chunks::<2>();
+    Ok(pairs
+        .iter()
+        .map(|&[hi, lo]| nibble(hi) << 4 | nibble(lo))
         .collect())
 }
 
