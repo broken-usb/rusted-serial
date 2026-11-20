@@ -81,8 +81,7 @@ pub fn load(ui: Option<&FontSpec>, mono: Option<&FontSpec>) -> SystemFonts {
 /// pt → px (1 pt = 4/3 px), limitado para não quebrar o layout.
 fn to_px(spec: Option<&FontSpec>, default: f32) -> f32 {
     spec.and_then(|s| s.size_pt)
-        .map(|pt| (pt * 4.0 / 3.0).clamp(11.0, 17.0))
-        .unwrap_or(default)
+        .map_or(default, |pt| (pt * 4.0 / 3.0).clamp(11.0, 17.0))
 }
 
 /// Primeira fonte (peso normal) da família pedida ou, se não houver, das genéricas.
@@ -164,14 +163,25 @@ pub fn apply(ctx: &egui::Context, fonts: SystemFonts) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn tamanhos() {
-        let s = |pt| FontSpec {
+    fn pt(size: f32) -> FontSpec {
+        FontSpec {
             family: "X".into(),
-            size_pt: Some(pt),
-        };
-        assert_eq!(to_px(Some(&s(9.0)), 13.0), 12.0);
-        assert_eq!(to_px(Some(&s(30.0)), 13.0), 17.0); // limitado
+            size_pt: Some(size),
+        }
+    }
+
+    #[test]
+    fn to_px_converte_pontos_em_pixels() {
+        assert_eq!(to_px(Some(&pt(9.0)), 13.0), 12.0);
+    }
+
+    #[test]
+    fn to_px_limita_fontes_enormes_para_nao_quebrar_o_layout() {
+        assert_eq!(to_px(Some(&pt(30.0)), 13.0), 17.0);
+    }
+
+    #[test]
+    fn to_px_usa_padrao_sem_tamanho_do_sistema() {
         assert_eq!(to_px(None, 13.0), 13.0);
     }
 }

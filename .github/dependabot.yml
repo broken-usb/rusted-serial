@@ -1,0 +1,19 @@
+# Abre PRs semanais atualizando as dependências do Cargo e as actions do CI
+# (que ficam fixadas por hash de commit no workflow).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

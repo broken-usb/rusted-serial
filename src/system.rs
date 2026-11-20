@@ -208,41 +208,72 @@ pub fn parse_kde_font(s: &str) -> Option<FontSpec> {
 mod tests {
     use super::*;
 
-    fn spec(family: &str, size: Option<f32>) -> Option<FontSpec> {
-        Some(FontSpec {
+    fn spec(family: &str, size_pt: Option<f32>) -> FontSpec {
+        FontSpec {
             family: family.into(),
-            size_pt: size,
-        })
+            size_pt,
+        }
     }
 
-    #[test]
-    fn fontes_gnome() {
-        assert_eq!(
-            parse_gnome_font("Adwaita Sans 11"),
-            spec("Adwaita Sans", Some(11.0))
-        );
-        assert_eq!(
-            parse_gnome_font("Adwaita Mono 10.5"),
-            spec("Adwaita Mono", Some(10.5))
-        );
-        assert_eq!(
-            parse_gnome_font("Cantarell Bold 11"),
-            spec("Cantarell", Some(11.0))
-        );
-        assert_eq!(parse_gnome_font("Inter"), spec("Inter", None));
-        assert_eq!(parse_gnome_font(""), None);
+    mod parse_gnome_font {
+        use super::*;
+
+        #[test]
+        fn separa_familia_e_tamanho() {
+            assert_eq!(
+                parse_gnome_font("Adwaita Sans 11"),
+                Some(spec("Adwaita Sans", Some(11.0)))
+            );
+        }
+
+        #[test]
+        fn aceita_tamanho_fracionado() {
+            assert_eq!(
+                parse_gnome_font("Adwaita Mono 10.5"),
+                Some(spec("Adwaita Mono", Some(10.5)))
+            );
+        }
+
+        #[test]
+        fn descarta_palavra_de_estilo() {
+            assert_eq!(
+                parse_gnome_font("Cantarell Bold 11"),
+                Some(spec("Cantarell", Some(11.0)))
+            );
+        }
+
+        #[test]
+        fn aceita_nome_sem_tamanho() {
+            assert_eq!(parse_gnome_font("Inter"), Some(spec("Inter", None)));
+        }
+
+        #[test]
+        fn texto_vazio_nao_e_fonte() {
+            assert_eq!(parse_gnome_font(""), None);
+        }
     }
 
-    #[test]
-    fn fontes_kde() {
-        assert_eq!(
-            parse_kde_font("Noto Sans,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"),
-            spec("Noto Sans", Some(10.0))
-        );
-        assert_eq!(
-            parse_kde_font("Hack,-1,12,5,50,0,0,0,0,0"),
-            spec("Hack", None)
-        );
-        assert_eq!(parse_kde_font(""), None);
+    mod parse_kde_font {
+        use super::*;
+
+        #[test]
+        fn separa_familia_e_tamanho() {
+            let qt = "Noto Sans,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1";
+            assert_eq!(parse_kde_font(qt), Some(spec("Noto Sans", Some(10.0))));
+        }
+
+        #[test]
+        fn tamanho_em_pixels_fica_sem_tamanho() {
+            // Qt usa -1 no tamanho em pontos quando a fonte foi definida em pixels.
+            assert_eq!(
+                parse_kde_font("Hack,-1,12,5,50,0,0,0,0,0"),
+                Some(spec("Hack", None))
+            );
+        }
+
+        #[test]
+        fn texto_vazio_nao_e_fonte() {
+            assert_eq!(parse_kde_font(""), None);
+        }
     }
 }

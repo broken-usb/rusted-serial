@@ -239,13 +239,17 @@ mod tests {
     ];
 
     #[test]
-    fn contraste_basico() {
+    fn contrast_entre_preto_e_branco_e_21_para_1() {
         assert!((contrast(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn contrast_de_uma_cor_com_ela_mesma_e_1_para_1() {
         assert!((contrast(Color32::WHITE, Color32::WHITE) - 1.0).abs() < 0.01);
     }
 
     #[test]
-    fn paleta_sempre_legivel() {
+    fn paleta_atende_contraste_wcag_com_qualquer_destaque() {
         for &a in ACCENTS {
             for scheme in [Scheme::Dark, Scheme::Light] {
                 let p = Palette::new(scheme, Some(hex(a)));
@@ -264,9 +268,12 @@ mod tests {
     }
 
     #[test]
-    fn sem_destaque_usa_padrao() {
-        let p = Palette::new(Scheme::Dark, None);
-        assert_eq!(p.accent, FALLBACK_ACCENT);
-        assert!(!p.accent_from_system);
+    fn sem_destaque_do_sistema_usa_laranja_padrao() {
+        assert_eq!(Palette::new(Scheme::Dark, None).accent, FALLBACK_ACCENT);
+    }
+
+    #[test]
+    fn sem_destaque_do_sistema_avisa_que_e_o_padrao() {
+        assert!(!Palette::new(Scheme::Dark, None).accent_from_system);
     }
 }

@@ -2,12 +2,15 @@
 name = "rusted-serial"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.95" # mínimo exigido pelo egui 0.37
+description = "Terminal serial nativo para Arduino, microcontroladores e switches gerenciáveis"
+license = "MIT"
 
 [dependencies]
 eframe = "0.37.0"
 serialport = "4.10.1"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 fontique = { version = "0.11", features = ["fontconfig-dlopen"] }
+jiff = "1.0.1"
 
 # Leitura do tema do sistema (cor de destaque + claro/escuro)
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -15,6 +18,21 @@ zbus = { version = "5", default-features = false, features = ["blocking-api", "a
 
 [target.'cfg(windows)'.dependencies]
 windows-registry = "0.100"
+
+# Lints do projeto (o CI roda o clippy com -D warnings: aviso vira erro).
+[lints.rust]
+future-incompatible = { level = "warn", priority = -1 }
+nonstandard-style = { level = "deny", priority = -1 }
+unsafe_code = "forbid" # o projeto não usa `unsafe`; impede que entre sem querer
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+# Do grupo "pedantic", só os que acharam problemas reais na revisão:
+format_push_string = "warn"
+needless_pass_by_value = "warn"
+map_unwrap_or = "warn"
+redundant_clone = "warn"
+needless_collect = "warn"
 
 # Binário final menor e mais rápido
 [profile.release]

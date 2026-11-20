@@ -1,5 +1,8 @@
 //! Interface gráfica (egui/eframe) — layout "Clássico refinado".
 
+use std::fmt::Write as _;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
@@ -8,6 +11,7 @@ use eframe::egui::{
 };
 
 use crate::fonts::SystemFonts;
+use crate::icons::{self, Icon, Kind};
 use crate::serial::{Connection, DataBits, Event, FlowControl, Parity, PortConfig, StopBits};
 use crate::system::SystemPrefs;
 use crate::theme::{Palette, Scheme};
@@ -38,6 +42,13 @@ const FLOWS: &[(&str, FlowControl)] = &[
 const MAX_LINES: usize = 100_000;
 /// Quebra linhas recebidas sem '\n' (ex.: protocolo binário) neste tamanho.
 const MAX_LINE_BYTES: usize = 256;
+/// Intervalo mínimo entre redesenhos causados por dados chegando (~30 quadros/s).
+/// PERF: o custo de um fluxo contínuo é quase todo desenhar quadros; a 30/s o texto
+/// ainda rola suave e a digitação não é afetada (teclado redesenha na hora).
+const FRAME_INTERVAL: Duration = Duration::from_millis(33);
+/// O que aparece no lugar de senhas, no terminal e no log (comprimento fixo:
+/// não revela o tamanho da senha).
+const SECRET_MASK: &str = "••••••••";
 
 #[derive(PartialEq, Clone, Copy)]
 enum LineEnding {
@@ -80,14 +91,19 @@ struct Line {
     time: String,
     dir: Dir,
     bytes: Vec<u8>,
+    /// Senha digitada: nunca é mostrada nem salva no log.
+    masked: bool,
 }
 
 impl Line {
     fn new(dir: Dir, bytes: Vec<u8>) -> Self {
         Self {
-            time: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
+            time: jiff::ZonedDateTime::now()
+                .strftime("%H:%M:%S.%3f")
+                .to_string(),
             dir,
             bytes,
+            masked: false,
         }
     }
 }
@@ -124,13 +140,15 @@ pub struct SerialApp {
 
     // Envio
     input: String,
+    /// Erro do campo de envio (ex.: HEX inválido), mostrado logo abaixo dele.
+    input_error: Option<String>,
     send_as_hex: bool,
     history: Vec<String>,
     history_pos: Option<usize>,
 }
 
 impl SerialApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, sys: SystemPrefs, fonts: SystemFonts) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, sys: &SystemPrefs, fonts: SystemFonts) -> Self {
         // Tema e fontes: lidos uma única vez, ao iniciar (veja `main`).
         let scheme = sys
             .scheme
@@ -169,6 +187,7 @@ impl SerialApp {
             timestamps: true,
             autoscroll: true,
             input: String::new(),
+            input_error: None,
             send_as_hex: false,
             history: Vec::new(),
             history_pos: None,
@@ -195,7 +214,9 @@ impl SerialApp {
 
     fn connect(&mut self, ctx: &egui::Context) {
         let ctx = ctx.clone();
-        match Connection::open(self.config(), move || ctx.request_repaint()) {
+        // Vários pedidos dentro do mesmo intervalo viram um só redesenho.
+        let notify = move || ctx.request_repaint_after(FRAME_INTERVAL);
+        match Connection::open(&self.config(), notify) {
             Ok(c) => {
                 self.conn = Some(c);
                 self.connected_at = Some(Instant::now());
@@ -250,13 +271,15 @@ impl SerialApp {
     fn push_rx(&mut self, data: &[u8]) {
         self.rx_total += data.len() as u64;
         for &b in data {
-            if !self.rx_open {
-                self.lines.push(Line::new(Dir::Rx, Vec::new()));
-                self.rx_open = true;
+            match self.lines.last_mut() {
+                Some(line) if self.rx_open => line.bytes.push(b),
+                _ => {
+                    self.lines.push(Line::new(Dir::Rx, vec![b]));
+                    self.rx_open = true;
+                }
             }
-            let line = self.lines.last_mut().expect("linha aberta");
-            line.bytes.push(b);
-            if b == b'\n' || line.bytes.len() >= MAX_LINE_BYTES {
+            let len = self.lines.last().map_or(0, |l| l.bytes.len());
+            if b == b'\n' || len >= MAX_LINE_BYTES {
                 self.rx_open = false;
             }
         }
@@ -274,16 +297,21 @@ impl SerialApp {
         self.rx_open = false;
     }
 
+    /// O dispositivo está pedindo uma senha? (última linha recebida termina em
+    /// "Password:", "Senha:" etc.) Nesse caso o que for digitado é mascarado.
+    fn awaiting_secret(&self) -> bool {
+        self.lines
+            .last()
+            .is_some_and(|l| l.dir == Dir::Rx && is_secret_prompt(&render_text(&l.bytes)))
+    }
+
     /// Salva o terminal como texto em ~/rusted-serial-AAAAMMDD-HHMMSS.log
     fn save_log(&mut self) {
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| ".".into());
-        let path = home.join(format!(
-            "rusted-serial-{}.log",
-            chrono::Local::now().format("%Y%m%d-%H%M%S")
-        ));
+            .map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let stamp = jiff::ZonedDateTime::now().strftime("%Y%m%d-%H%M%S");
+
         let mut out = String::new();
         for l in &self.lines {
             let tag = match l.dir {
@@ -292,38 +320,52 @@ impl SerialApp {
                 Dir::Info => "--",
                 Dir::Error => "!!",
             };
-            out.push_str(&format!("{} {} {}\n", l.time, tag, render_text(&l.bytes)));
+            let body = if l.masked {
+                "[senha oculta]".into()
+            } else {
+                render_text(&l.bytes)
+            };
+            let _ = writeln!(out, "{} {tag} {body}", l.time);
         }
-        self.notice = Some(match std::fs::write(&path, out) {
-            Ok(()) => (format!("Log salvo em {}", path.display()), false),
-            Err(e) => (format!("Não foi possível salvar o log: {e}"), true),
-        });
+
+        self.notice = Some(
+            match write_private_file(&home, &format!("rusted-serial-{stamp}"), &out) {
+                Ok(path) => (format!("Log salvo em {}", path.display()), false),
+                Err(e) => (format!("Não foi possível salvar o log: {e}"), true),
+            },
+        );
     }
 
     // ───────────── Envio ─────────────
 
     fn send_input(&mut self) {
         let Some(conn) = &self.conn else { return };
-        let mut bytes = if self.send_as_hex {
+        let secret = self.awaiting_secret();
+        let mut bytes = if self.send_as_hex && !secret {
             match parse_hex(&self.input) {
                 Ok(b) => b,
                 Err(e) => {
-                    self.notice = Some((e, true));
+                    self.input_error = Some(e);
                     return;
                 }
             }
         } else {
             self.input.as_bytes().to_vec()
         };
+        self.input_error = None;
         bytes.extend_from_slice(self.line_ending.bytes());
         self.tx_total += bytes.len() as u64;
         conn.send(bytes.clone());
 
         self.rx_open = false;
-        self.lines.push(Line::new(Dir::Tx, bytes));
+        self.lines.push(Line {
+            masked: secret,
+            ..Line::new(Dir::Tx, bytes)
+        });
         self.trim();
 
-        if !self.input.is_empty() && self.history.last() != Some(&self.input) {
+        // Senhas nunca entram no histórico.
+        if !secret && !self.input.is_empty() && self.history.last() != Some(&self.input) {
             self.history.push(self.input.clone());
         }
         self.history_pos = None;
@@ -344,8 +386,7 @@ impl SerialApp {
         };
         self.input = self
             .history_pos
-            .map(|i| self.history[i].clone())
-            .unwrap_or_default();
+            .map_or_else(String::new, |i| self.history[i].clone());
     }
 
     // ───────────── Partes da tela ─────────────
@@ -435,7 +476,17 @@ impl SerialApp {
                         }
                     });
                 });
-            if ui.button("⟳").on_hover_text("Atualizar portas").clicked() {
+            if icons::button(
+                ui,
+                &p,
+                Kind::Outline,
+                Icon::Refresh,
+                None,
+                "Atualizar portas",
+            )
+            .on_hover_text("Atualizar portas")
+            .clicked()
+            {
                 self.ports = crate::serial::list_ports();
                 if !self.ports.contains(&self.port) {
                     self.port = self.ports.first().cloned().unwrap_or_default();
@@ -485,22 +536,20 @@ impl SerialApp {
         let connected = self.conn.is_some();
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if connected {
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new("■  Desconectar").strong())
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::new(1.0, p.border)),
-                    )
-                    .clicked()
-                {
+                let label = "Desconectar";
+                if icons::button(ui, &p, Kind::Outline, Icon::Stop, Some(label), label).clicked() {
                     self.disconnect();
                 }
             } else {
                 let can = !self.port.is_empty();
-                if ui
-                    .add_enabled(can, accent_button(&p, "▶  Conectar"))
-                    .clicked()
-                {
+                let label = "Conectar";
+                let clicked = ui
+                    .add_enabled_ui(can, |ui| {
+                        icons::button(ui, &p, Kind::Accent, Icon::Play, Some(label), label)
+                    })
+                    .inner
+                    .clicked();
+                if clicked {
                     self.connect(ui.ctx());
                 }
             }
@@ -513,36 +562,43 @@ impl SerialApp {
 
     fn status_pill(&self, ui: &mut egui::Ui) {
         let p = &self.pal;
-        let (bg, dot, text, label) = match self.connected_at {
+        let body = TextStyle::Body.resolve(ui.style());
+        let fmt = |font: FontId, color: Color32| TextFormat {
+            font_id: font,
+            color,
+            ..Default::default()
+        };
+
+        let mut job = LayoutJob::default();
+        let (bg, dot) = match self.connected_at {
             Some(t) => {
                 let s = t.elapsed().as_secs();
-                (
-                    p.ok_bg,
-                    p.ok_dot,
-                    p.ok_text,
-                    format!(
-                        "Conectado · {:02}:{:02}:{:02}",
-                        s / 3600,
-                        (s / 60) % 60,
-                        s % 60
-                    ),
-                )
+                job.append("Conectado · ", 0.0, fmt(body.clone(), p.ok_text));
+                // Algarismos de largura fixa: o indicador não "treme" a cada segundo.
+                let mono = FontId::monospace(body.size * 0.95);
+                let time = format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60);
+                job.append(&time, 0.0, fmt(mono, p.ok_text));
+                (p.ok_bg, p.ok_dot)
             }
-            None => (p.idle_bg, p.faint, p.muted, "Desconectado".to_string()),
+            None => {
+                job.append("Desconectado", 0.0, fmt(body, p.muted));
+                (p.idle_bg, p.faint)
+            }
         };
         // Desenhado à mão para ter exatamente o tamanho do conteúdo.
-        let font = TextStyle::Body.resolve(ui.style());
-        let galley = ui.painter().layout_no_wrap(label, font, text);
+        let galley = ui.painter().layout_job(job);
         let size = egui::vec2(
             12.0 + 8.0 + 7.0 + galley.size().x + 14.0,
             (galley.size().y + 11.0).max(26.0),
         );
-        let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+        let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+        let text = galley.text().to_owned();
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Status, true, &text));
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), bg);
         painter.circle_filled(egui::pos2(rect.left() + 16.0, rect.center().y), 4.0, dot);
         let text_pos = egui::pos2(rect.left() + 27.0, rect.center().y - galley.size().y / 2.0);
-        painter.galley(text_pos, galley, text);
+        painter.galley(text_pos, galley, p.text);
     }
 
     fn terminal(&mut self, ui: &mut egui::Ui) {
@@ -572,21 +628,32 @@ impl SerialApp {
                             ui.checkbox(&mut self.timestamps, "Timestamps");
                             ui.checkbox(&mut self.autoscroll, "Auto-scroll");
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.add(egui::Button::new("🗑 Limpar").frame(false)).clicked() {
-                                    self.clear();
-                                }
-                                if ui
-                                    .add(egui::Button::new("💾 Salvar log").frame(false))
-                                    .clicked()
-                                {
-                                    self.save_log();
-                                }
+                                let has_lines = !self.lines.is_empty();
+                                ui.add_enabled_ui(has_lines, |ui| {
+                                    let l = "Limpar";
+                                    if icons::button(ui, &p, Kind::Plain, Icon::Trash, Some(l), l)
+                                        .clicked()
+                                    {
+                                        self.clear();
+                                    }
+                                    let l = "Salvar log";
+                                    if icons::button(ui, &p, Kind::Plain, Icon::Save, Some(l), l)
+                                        .clicked()
+                                    {
+                                        self.save_log();
+                                    }
+                                });
                             });
                         });
                     });
                 let r = ui.available_rect_before_wrap();
                 ui.painter()
                     .hline(r.x_range(), r.top(), Stroke::new(1.0, p.border));
+
+                if self.lines.is_empty() {
+                    self.empty_state(ui);
+                    return;
+                }
 
                 // Linhas (só as visíveis são desenhadas: rápido mesmo com 100 mil linhas)
                 let font = TextStyle::Monospace.resolve(ui.style());
@@ -616,6 +683,37 @@ impl SerialApp {
             });
     }
 
+    /// Terminal vazio: diz o que fazer em vez de mostrar um espaço em branco.
+    fn empty_state(&self, ui: &mut egui::Ui) {
+        let p = &self.pal;
+        let (title, hint) = if self.conn.is_some() {
+            (
+                "Conectado. Aguardando dados…",
+                "O que o dispositivo enviar aparece aqui.".to_string(),
+            )
+        } else if self.port.is_empty() {
+            (
+                "Nenhuma porta encontrada",
+                "Conecte o cabo e clique em atualizar, ou digite o caminho em Porta → Outra porta…"
+                    .to_string(),
+            )
+        } else {
+            (
+                "Nenhuma conexão",
+                format!(
+                    "Confira baud e formato acima e clique em Conectar para abrir {}.",
+                    self.port
+                ),
+            )
+        };
+        ui.add_space((ui.available_height() / 2.0 - 30.0).max(16.0));
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new(title).strong().color(p.text));
+            ui.add_space(4.0);
+            ui.label(RichText::new(hint).color(p.muted));
+        });
+    }
+
     /// Monta uma linha colorida: horário · marcador · conteúdo.
     fn line_job(&self, line: &Line, font: &FontId) -> LayoutJob {
         let p = &self.pal;
@@ -639,7 +737,9 @@ impl SerialApp {
         job.append(mark, 0.0, fmt(p.accent_text));
         job.append(" ", 0.0, fmt(color));
 
-        let body = if self.show_hex && matches!(line.dir, Dir::Rx | Dir::Tx) {
+        let body = if line.masked {
+            SECRET_MASK.to_string()
+        } else if self.show_hex && matches!(line.dir, Dir::Rx | Dir::Tx) {
             render_hex(&line.bytes)
         } else {
             render_text(&line.bytes)
@@ -656,6 +756,12 @@ impl SerialApp {
     fn input_bar(&mut self, ui: &mut egui::Ui) {
         let p = self.pal.clone();
         let connected = self.conn.is_some();
+        let secret = connected && self.awaiting_secret();
+        let border = if self.input_error.is_some() {
+            p.error_text
+        } else {
+            p.border
+        };
         ui.horizontal(|ui| {
             let right_w = 330.0;
             let field_w = (ui.available_width() - right_w).max(200.0);
@@ -663,14 +769,23 @@ impl SerialApp {
             let mut send = false;
             egui::Frame::new()
                 .fill(p.field)
-                .stroke(Stroke::new(1.0, p.border))
+                .stroke(Stroke::new(1.0, border))
                 .corner_radius(CornerRadius::same(8))
                 .inner_margin(Margin::symmetric(12, 2))
                 .show(ui, |ui| {
                     ui.set_width(field_w - 26.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("›").monospace().strong().color(p.accent_text));
-                        let hint = if self.send_as_hex {
+                        if secret {
+                            let size = TextStyle::Body.resolve(ui.style()).size;
+                            let (r, _) =
+                                ui.allocate_exact_size(egui::Vec2::splat(size), Sense::hover());
+                            icons::paint(ui.painter(), Icon::Lock, r, p.accent_text);
+                        } else {
+                            ui.label(RichText::new("›").monospace().strong().color(p.accent_text));
+                        }
+                        let hint = if secret {
+                            "Senha: não aparece na tela, no histórico nem no log"
+                        } else if self.send_as_hex {
                             "Bytes em HEX, ex.: AA 01 FF"
                         } else {
                             "Digite um comando e pressione Enter  (↑↓ histórico)"
@@ -679,12 +794,16 @@ impl SerialApp {
                             connected,
                             egui::TextEdit::singleline(&mut self.input)
                                 .hint_text(hint)
+                                .password(secret)
                                 .font(egui::TextStyle::Monospace)
                                 .frame(egui::Frame::NONE)
                                 .align(egui::Align2::LEFT_CENTER)
                                 .desired_width(f32::INFINITY),
                         );
-                        if resp.has_focus() {
+                        if resp.changed() {
+                            self.input_error = None;
+                        }
+                        if resp.has_focus() && !secret {
                             if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
                                 self.history_step(true);
                             } else if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
@@ -707,17 +826,27 @@ impl SerialApp {
                         ui.selectable_value(&mut self.line_ending, le, le.label());
                     }
                 });
-            ui.checkbox(&mut self.send_as_hex, "HEX");
-            if ui
-                .add_enabled(connected, accent_button(&p, "Enviar  →"))
-                .clicked()
-            {
+            if ui.checkbox(&mut self.send_as_hex, "HEX").changed() {
+                self.input_error = None;
+            }
+            let clicked = ui
+                .add_enabled_ui(connected, |ui| {
+                    icons::button(ui, &p, Kind::Accent, Icon::Send, Some("Enviar"), "Enviar")
+                })
+                .inner
+                .clicked();
+            if clicked {
                 send = true;
             }
             if send {
                 self.send_input();
             }
         });
+        // Erro junto do campo que causou, não lá no rodapé.
+        if let Some(err) = &self.input_error {
+            ui.add_space(4.0);
+            ui.label(RichText::new(err).small().color(p.error_text));
+        }
     }
 
     fn footer(&self, ui: &mut egui::Ui) {
@@ -730,8 +859,10 @@ impl SerialApp {
             } else {
                 ui.label(small("Sem conexão".into(), p.muted));
             }
-            ui.label(small(format!("RX {}", human_bytes(self.rx_total)), p.muted));
-            ui.label(small(format!("TX {}", human_bytes(self.tx_total)), p.muted));
+            // Contadores em monoespaçada: o que vem depois não "pula" quando mudam.
+            let counter = |s: String| RichText::new(s).monospace().small().color(p.muted);
+            ui.label(counter(format!("RX {:<8}", human_bytes(self.rx_total))));
+            ui.label(counter(format!("TX {:<8}", human_bytes(self.tx_total))));
             if let Some((msg, is_err)) = &self.notice {
                 ui.label(small(
                     msg.clone(),
@@ -824,15 +955,7 @@ fn logo(ui: &mut egui::Ui, p: &Palette) {
     painter.line_segment([c + egui::vec2(1.0, 6.0), c + egui::vec2(8.0, 6.0)], s);
 }
 
-fn accent_button<'a>(p: &Palette, text: &'a str) -> egui::Button<'a> {
-    egui::Button::new(RichText::new(text).strong().color(p.on_accent))
-        .fill(p.accent)
-        .stroke(Stroke::NONE)
-        .corner_radius(CornerRadius::same(7))
-        .min_size(egui::vec2(0.0, 30.0))
-}
-
-/// Botões segmentados (ex.: Texto | HEX).
+/// Botões segmentados (ex.: Texto | HEX). Leitores de tela anunciam qual está ativo.
 fn segmented<T: PartialEq + Copy>(
     ui: &mut egui::Ui,
     p: &Palette,
@@ -854,6 +977,7 @@ fn segmented<T: PartialEq + Copy>(
                     } else {
                         p.muted
                     }))
+                    .selected(on)
                     .fill(if on { p.accent } else { Color32::TRANSPARENT })
                     .stroke(Stroke::NONE)
                     .corner_radius(CornerRadius::same(5));
@@ -865,20 +989,60 @@ fn segmented<T: PartialEq + Copy>(
         });
 }
 
+// ───────────── Arquivos ─────────────
+
+/// Cria `<dir>/<stem>.log` legível só pelo usuário (0600 no Linux) sem
+/// sobrescrever nada; se o nome já existir, tenta `<stem>-2.log`, `-3`…
+fn write_private_file(dir: &Path, stem: &str, content: &str) -> std::io::Result<PathBuf> {
+    let mut opts = std::fs::OpenOptions::new();
+    // create_new: falha se já existir (inclusive um link simbólico com esse nome).
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+
+    for n in 1..=99 {
+        let name = if n == 1 {
+            format!("{stem}.log")
+        } else {
+            format!("{stem}-{n}.log")
+        };
+        let path = dir.join(name);
+        match opts.open(&path) {
+            Ok(mut file) => {
+                file.write_all(content.as_bytes())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "nomes de arquivo esgotados",
+    ))
+}
+
 // ───────────── Formatação ─────────────
 
-/// Bytes → texto exibível (ignora \r e \n, troca controles por '·').
+/// Bytes → texto exibível: ignora \r e \n e troca por '·' os caracteres de
+/// controle e os invisíveis de direção/formatação (U+202E etc.), que um
+/// dispositivo poderia usar para embaralhar visualmente o terminal e o log.
 fn render_text(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len());
     for ch in String::from_utf8_lossy(bytes).chars() {
         match ch {
             '\r' | '\n' => {}
             '\t' => s.push_str("    "),
-            c if c.is_control() => s.push('·'),
+            c if c.is_control() || is_invisible_format(c) => s.push('·'),
             c => s.push(c),
         }
     }
     s
+}
+
+/// Caracteres invisíveis de formatação/direção (bidi, largura zero, BOM).
+fn is_invisible_format(c: char) -> bool {
+    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
 }
 
 fn render_hex(bytes: &[u8]) -> String {
@@ -887,60 +1051,166 @@ fn render_hex(bytes: &[u8]) -> String {
         if i > 0 {
             s.push(' ');
         }
-        s.push_str(&format!("{b:02X}"));
+        let _ = write!(s, "{b:02X}"); // escrever numa String nunca falha
     }
     s
 }
 
 fn human_bytes(n: u64) -> String {
+    let f = n as f64; // perda de precisão irrelevante: só exibe 1 casa decimal
     match n {
         0..1024 => format!("{n} B"),
-        1024..1_048_576 => format!("{:.1} KB", n as f64 / 1024.0).replace('.', ","),
-        _ => format!("{:.1} MB", n as f64 / 1_048_576.0).replace('.', ","),
+        1024..1_048_576 => format!("{:.1} KB", f / 1024.0).replace('.', ","),
+        _ => format!("{:.1} MB", f / 1_048_576.0).replace('.', ","),
     }
+}
+
+/// O texto parece um pedido de senha? ("Password:", "Enter PIN:", "Senha: ")
+fn is_secret_prompt(text: &str) -> bool {
+    let t = text.trim_end().to_lowercase();
+    t.ends_with(':')
+        && ["password", "passphrase", "senha", "pin", "secret"]
+            .iter()
+            .any(|w| t.contains(w))
 }
 
 /// Converte "AA 01 ff" ou "AA01FF" em bytes.
 fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
-    let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    if !clean.len().is_multiple_of(2) {
-        return Err("HEX inválido: número ímpar de dígitos".into());
+    let digits: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    // Valida antes de converter: só dígitos HEX ASCII (evita cortar um "é" ao meio).
+    if let Some(bad) = s
+        .chars()
+        .find(|c| !c.is_whitespace() && !c.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "HEX inválido: '{bad}' não é um dígito hexadecimal (0-9, A-F)"
+        ));
     }
-    (0..clean.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(&clean[i..i + 2], 16)
-                .map_err(|_| format!("HEX inválido: {}", &clean[i..i + 2]))
-        })
-        .collect()
+    if !digits.len().is_multiple_of(2) {
+        return Err("HEX inválido: número ímpar de dígitos (cada byte usa 2, ex.: 0A)".into());
+    }
+    let nibble = |d: u8| char::from(d).to_digit(16).unwrap_or(0) as u8;
+    Ok(digits
+        .chunks_exact(2)
+        .map(|pair| nibble(pair[0]) << 4 | nibble(pair[1]))
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn hex_ok() {
-        assert_eq!(parse_hex("AA 01 ff").unwrap(), vec![0xAA, 0x01, 0xFF]);
-        assert_eq!(parse_hex("0a0D").unwrap(), vec![0x0A, 0x0D]);
+    mod parse_hex {
+        use super::*;
+
+        #[test]
+        fn aceita_bytes_separados_por_espaco_e_minusculas() {
+            assert_eq!(parse_hex("AA 01 ff"), Ok(vec![0xAA, 0x01, 0xFF]));
+        }
+
+        #[test]
+        fn aceita_bytes_colados() {
+            assert_eq!(parse_hex("0a0D"), Ok(vec![0x0A, 0x0D]));
+        }
+
+        #[test]
+        fn recusa_numero_impar_de_digitos() {
+            assert!(parse_hex("ABC").is_err());
+        }
+
+        #[test]
+        fn recusa_letras_fora_do_hexadecimal() {
+            assert!(parse_hex("ZZ").is_err());
+        }
+
+        #[test]
+        fn recusa_acentos_sem_entrar_em_panic() {
+            // Antes, "aéa" cortava o "é" ao meio e derrubava o app.
+            assert!(parse_hex("aéa").is_err());
+        }
+    }
+
+    mod render_text {
+        use super::*;
+
+        #[test]
+        fn remove_quebras_de_linha() {
+            assert_eq!(render_text(b"Switch#\r\n"), "Switch#");
+        }
+
+        #[test]
+        fn troca_caracteres_de_controle_por_ponto() {
+            assert_eq!(render_text(&[0x41, 0x01, 0x42]), "A·B");
+        }
+
+        #[test]
+        fn troca_inversao_de_direcao_unicode_por_ponto() {
+            assert_eq!(render_text("ok\u{202E}txe".as_bytes()), "ok·txe");
+        }
     }
 
     #[test]
-    fn hex_err() {
-        assert!(parse_hex("ABC").is_err());
-        assert!(parse_hex("ZZ").is_err());
-    }
-
-    #[test]
-    fn texto_e_hex() {
-        assert_eq!(render_text(b"Switch#\r\n"), "Switch#");
-        assert_eq!(render_text(&[0x41, 0x01, 0x42]), "A·B");
+    fn render_hex_separa_bytes_com_espaco() {
         assert_eq!(render_hex(&[0xAA, 0x0D, 0x0A]), "AA 0D 0A");
     }
 
     #[test]
-    fn bytes_legiveis() {
+    fn human_bytes_mostra_bytes_abaixo_de_1_kb() {
         assert_eq!(human_bytes(312), "312 B");
+    }
+
+    #[test]
+    fn human_bytes_usa_virgula_decimal_em_kb() {
         assert_eq!(human_bytes(12_697), "12,4 KB");
+    }
+
+    mod is_secret_prompt {
+        use super::*;
+
+        #[test]
+        fn reconhece_password_do_cisco() {
+            assert!(is_secret_prompt("Password: "));
+        }
+
+        #[test]
+        fn reconhece_senha_em_portugues() {
+            assert!(is_secret_prompt("Senha:"));
+        }
+
+        #[test]
+        fn ignora_texto_que_so_menciona_senha() {
+            assert!(!is_secret_prompt("password changed successfully"));
+        }
+
+        #[test]
+        fn ignora_prompt_comum() {
+            assert!(!is_secret_prompt("Switch#"));
+        }
+    }
+
+    mod write_private_file {
+        use super::*;
+
+        #[test]
+        fn nao_sobrescreve_arquivo_existente() {
+            let dir = std::env::temp_dir().join(format!("rs-log-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let first = write_private_file(&dir, "log", "a").unwrap();
+            let second = write_private_file(&dir, "log", "b").unwrap();
+            assert_ne!(first, second);
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn cria_arquivo_legivel_so_pelo_usuario() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = std::env::temp_dir().join(format!("rs-perm-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = write_private_file(&dir, "log", "x").unwrap();
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert_eq!(mode, 0o600);
+        }
     }
 }
