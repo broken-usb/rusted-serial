@@ -47,7 +47,6 @@ pub enum Event {
 
 /// Handle de uma conexão ativa.
 pub struct Connection {
-    pub config: PortConfig,
     cmd_tx: Sender<Command>,
     evt_rx: Receiver<Event>,
     thread: Option<JoinHandle<()>>,
@@ -128,7 +127,6 @@ impl Connection {
             .expect("falha ao criar thread serial");
 
         Ok(Self {
-            config,
             cmd_tx,
             evt_rx,
             thread: Some(thread),

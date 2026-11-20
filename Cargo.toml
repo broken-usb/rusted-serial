@@ -6,6 +6,14 @@ edition = "2024"
 [dependencies]
 eframe = "0.37.0"
 serialport = "4.10.1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+# Leitura do tema do sistema (cor de destaque + claro/escuro)
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.100"
 
 # Binário final menor e mais rápido
 [profile.release]
