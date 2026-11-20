@@ -21,8 +21,8 @@ windows-registry = "0.100"
 
 # Lints do projeto (o CI roda o clippy com -D warnings: aviso vira erro).
 [lints.rust]
-future-incompatible = { level = "warn", priority = -1 }
-nonstandard-style = { level = "deny", priority = -1 }
+future_incompatible = { level = "warn", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
 unsafe_code = "forbid" # o projeto não usa `unsafe`; impede que entre sem querer
 
 [lints.clippy]
