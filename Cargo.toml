@@ -6,3 +6,10 @@ edition = "2024"
 [dependencies]
 eframe = "0.37.0"
 serialport = "4.10.1"
+
+# Binário final menor e mais rápido
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
