@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Rusted Serial
+GenericName=Terminal Serial
+Comment=Terminal serial para Arduino, microcontroladores e switches gerenciáveis
+Exec=rusted-serial
+Icon=rusted-serial
+Terminal=false
+Categories=Development;Electronics;
+Keywords=serial;uart;tty;console;arduino;pic;switch;cisco;
+StartupWMClass=rusted-serial

@@ -9,7 +9,7 @@ license = "MIT"
 [dependencies]
 eframe = "0.37.0"
 serialport = "4.10.1"
-fontique = { version = "0.13", features = ["fontconfig-dlopen"] }
+fontique = { version = "0.11", features = ["fontconfig-dlopen"] }
 jiff = "1.0.1"
 
 # Leitura do tema do sistema (cor de destaque + claro/escuro)
@@ -18,6 +18,9 @@ zbus = { version = "5", default-features = false, features = ["blocking-api", "a
 
 [target.'cfg(windows)'.dependencies]
 windows-registry = "0.100"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 # Lints do projeto (o CI roda o clippy com -D warnings: aviso vira erro).
 [lints.rust]
@@ -33,6 +36,36 @@ needless_pass_by_value = "warn"
 map_unwrap_or = "warn"
 redundant_clone = "warn"
 needless_collect = "warn"
+
+# Pacote .deb (Debian, Ubuntu, Mint…), gerado pelo `cargo deb` no workflow de release.
+[package.metadata.deb]
+maintainer = "broken-usb"
+copyright = "2026, broken-usb"
+license-file = ["LICENSE", "0"]
+section = "electronics"
+priority = "optional"
+extended-description = """\
+Terminal serial nativo para Arduino, microcontroladores (PIC, AVR, ESP) e consoles \
+de switches gerenciáveis. Segue o tema, a cor de destaque e as fontes do sistema."""
+assets = [
+    ["target/release/rusted-serial", "usr/bin/", "755"],
+    ["assets/rusted-serial.desktop", "usr/share/applications/", "644"],
+    ["assets/icon.svg", "usr/share/icons/hicolor/scalable/apps/rusted-serial.svg", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/512x512/apps/rusted-serial.png", "644"],
+    ["README.md", "usr/share/doc/rusted-serial/README.md", "644"],
+]
+
+# Pacote .rpm (Fedora, openSUSE…), gerado pelo `cargo generate-rpm` no workflow de release.
+[package.metadata.generate-rpm]
+summary = "Terminal serial para Arduino, microcontroladores e switches gerenciáveis"
+assets = [
+    { source = "target/release/rusted-serial", dest = "/usr/bin/rusted-serial", mode = "755" },
+    { source = "assets/rusted-serial.desktop", dest = "/usr/share/applications/rusted-serial.desktop", mode = "644" },
+    { source = "assets/icon.svg", dest = "/usr/share/icons/hicolor/scalable/apps/rusted-serial.svg", mode = "644" },
+    { source = "assets/icon.png", dest = "/usr/share/icons/hicolor/512x512/apps/rusted-serial.png", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/rusted-serial/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/rusted-serial/LICENSE", mode = "644", doc = true },
+]
 
 # Binário final menor e mais rápido
 [profile.release]

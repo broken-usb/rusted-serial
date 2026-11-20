@@ -21,7 +21,26 @@
 - **Cara de nativo:** segue o modo claro/escuro, a cor de destaque e as fontes do sistema (GNOME, KDE e Windows).
 - **Portas virtuais:** aceita qualquer caminho em *Porta → Outra porta…* (`/dev/pts/3`, `/dev/rfcomm0`, `COM10`).
 
-## Instalação
+## Download
+
+Baixe a versão mais recente em [**Releases**](../../releases/latest):
+
+| Sistema | Arquivo | Como usar |
+|---|---|---|
+| Windows | `rusted-serial-X.Y.Z-windows-x86_64.exe` | Portátil: é só abrir. Não instala nada nem pede administrador |
+| Debian, Ubuntu, Mint… | `rusted-serial_X.Y.Z-1_amd64.deb` | `sudo apt install ./rusted-serial_*.deb` |
+| Fedora, openSUSE | `rusted-serial-X.Y.Z-1.x86_64.rpm` | `sudo dnf install ./rusted-serial-*.rpm` (openSUSE: `sudo zypper install ./…`) |
+| Outras distribuições | `rusted-serial-X.Y.Z-linux-x86_64.tar.gz` | Extraia e rode `./rusted-serial` |
+
+- No Linux, os pacotes funcionam no Ubuntu 22.04, Debian 12 ou mais novos (glibc 2.35+), e
+  você ainda precisa da [permissão para usar as portas](#permissão-para-usar-as-portas).
+- No Windows, o SmartScreen pode avisar que o app é desconhecido, porque o executável não é
+  assinado digitalmente: clique em **Mais informações → Executar assim mesmo**.
+- Para conferir se o download não foi corrompido ou alterado:
+  `sha256sum -c SHA256SUMS.txt --ignore-missing`.
+- Versões marcadas como **Pre-release** são de teste.
+
+## Compilar a partir do código
 
 O único requisito comum é o **Rust 1.95 ou mais novo** (exigência do egui 0.37).
 Em qualquer sistema, o caminho mais simples é o [rustup](https://rustup.rs). Distribuições
@@ -146,6 +165,17 @@ No Windows, o equivalente é criar um par de portas COM virtuais com o
 | `src/system.rs` | Lê tema, cor de destaque e fontes do sistema (uma vez, ao iniciar) |
 | `src/theme.rs` | Paleta tingida com a cor de destaque, com contraste mínimo garantido |
 | `src/fonts.rs` | Carrega as fontes do sistema |
+| `build.rs` | No Windows, embute o ícone e a versão no `.exe` |
+
+## Lançar uma versão
+
+1. Para um lançamento normal, aumente `version` no `Cargo.toml` e rode `cargo build`, que
+   atualiza o `Cargo.lock`. Faça commit e push dos dois arquivos.
+2. No GitHub: **Actions → Release → Run workflow**, escolha a branch e o tipo:
+   - `pre-release`: versão de teste, pode repetir quantas vezes quiser (tag `vX.Y.Z-pre.N`);
+   - `release`: versão oficial (tag `vX.Y.Z`); falha se essa versão já foi lançada.
+3. O workflow roda os testes, compila no Linux e no Windows, gera os pacotes e o
+   `SHA256SUMS.txt` e publica tudo em Releases, com as notas geradas a partir dos commits.
 
 ## Créditos
 
