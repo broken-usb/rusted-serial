@@ -23,12 +23,56 @@
 
 ## Instalação
 
-### Fedora
+O único requisito comum é o **Rust 1.95 ou mais novo** (exigência do egui 0.37).
+Em qualquer sistema, o caminho mais simples é o [rustup](https://rustup.rs). Distribuições
+com Rust recente no repositório (Fedora, Arch, openSUSE Tumbleweed) também podem usar o pacote.
+
+Os executáveis de Linux e Windows também ficam disponíveis em cada execução do CI
+(aba **Actions** → execução → **Artifacts**).
+
+### Linux
+
+No Linux, além do Rust, é preciso a `libudev` (para listar as portas) e o `pkg-config`.
+
+#### Fedora
 
 ```bash
-sudo dnf install rust cargo systemd-devel   # systemd-devel traz a libudev
-sudo usermod -aG dialout $USER              # acesso às portas seriais (saia e entre na sessão)
+sudo dnf install rust cargo gcc systemd-devel   # systemd-devel traz a libudev
 ```
+
+#### Debian, Ubuntu e derivados (Mint, Pop!_OS…)
+
+```bash
+sudo apt install build-essential pkg-config libudev-dev curl
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+O pacote `rustc` do apt costuma ser mais antigo que o 1.95, por isso o rustup.
+
+#### Arch Linux e Manjaro
+
+```bash
+sudo pacman -S --needed base-devel rust   # a libudev já vem no systemd-libs
+```
+
+#### openSUSE
+
+```bash
+sudo zypper install gcc pkg-config 'pkgconfig(libudev)'
+sudo zypper install rust   # Tumbleweed; no Leap, prefira o rustup
+```
+
+#### Permissão para usar as portas
+
+As portas seriais pertencem a um grupo do sistema. Entre nele e depois **saia e entre de novo
+na sessão**:
+
+| Distribuição | Comando |
+|---|---|
+| Fedora, Debian, Ubuntu, openSUSE | `sudo usermod -aG dialout $USER` |
+| Arch, Manjaro | `sudo usermod -aG uucp $USER` |
+
+Na dúvida, `ls -l /dev/ttyUSB0` mostra qual é o grupo dono da porta.
 
 > Se um Arduino conectado em `/dev/ttyACM*` reinicia ou mostra lixo logo ao plugar, é o
 > ModemManager sondando a porta. Se você não usa modem 3G/4G:
@@ -36,10 +80,30 @@ sudo usermod -aG dialout $USER              # acesso às portas seriais (saia e 
 
 ### Windows
 
-Instale o Rust pelo [rustup](https://rustup.rs). Não há dependências extras.
+1. Instale o Rust: `winget install Rustlang.Rustup` ou baixe o instalador em [rustup.rs](https://rustup.rs).
+2. O Rust no Windows precisa das ferramentas de compilação C++ da Microsoft. O instalador
+   do rustup oferece instalá-las sozinho; se não oferecer, instale o
+   [Build Tools for Visual Studio](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+   com a carga de trabalho **Desenvolvimento para desktop com C++**.
+3. No PowerShell, dentro da pasta do projeto: `cargo run --release`.
 
-Os executáveis de Linux e Windows também ficam disponíveis em cada execução do CI
-(aba **Actions** → execução → **Artifacts**).
+As portas aparecem como `COM3`, `COM4`… (veja em *Gerenciador de Dispositivos → Portas (COM e LPT)*).
+Adaptadores baratos com chip CH340 às vezes precisam do driver do fabricante.
+
+### macOS
+
+```bash
+xcode-select --install   # ferramentas de linha de comando (linker)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Cada porta aparece duas vezes: use a `/dev/cu.*` (ex.: `/dev/cu.usbserial-1410`,
+`/dev/cu.usbmodem14101`). A `/dev/tty.*` fica esperando o sinal de portadora (DCD) e pode
+não conectar.
+
+> **Suporte experimental:** o macOS ainda não é compilado no CI nem foi testado num Mac.
+> O código foi escrito para funcionar lá (modo claro/escuro e fontes do sistema), mas a cor
+> de destaque do sistema ainda não é lida: o app usa o laranja padrão.
 
 ## Compilar e rodar
 
@@ -47,19 +111,30 @@ Os executáveis de Linux e Windows também ficam disponíveis em cada execução
 cargo run --release
 ```
 
-Requer Rust 1.95 ou mais novo (exigência do egui 0.37).
+O executável fica em `target/release/rusted-serial` (`rusted-serial.exe` no Windows).
+
+### Como as portas aparecem
+
+| Sistema | Exemplos |
+|---|---|
+| Linux | `/dev/ttyUSB0` (adaptador USB-serial, cabo console), `/dev/ttyACM0` (Arduino Uno/Leonardo), `/dev/ttyS0` (porta serial da placa-mãe) |
+| Windows | `COM3`, `COM4`… |
+| macOS | `/dev/cu.usbserial-…`, `/dev/cu.usbmodem…` |
 
 ## Testar sem hardware
 
-Crie um par de portas virtuais ligadas entre si:
+Crie um par de portas virtuais ligadas entre si (Linux e macOS):
 
 ```bash
-sudo dnf install socat
+# instale o socat: dnf / apt / pacman / zypper install socat — no macOS: brew install socat
 socat -d -d pty,raw,echo=0,link=/tmp/ttyA pty,raw,echo=0,link=/tmp/ttyB
 ```
 
 No app, use *Porta → Outra porta…* → `/tmp/ttyA`. O que for escrito em `/tmp/ttyB`
 (por exemplo `echo "olá" > /tmp/ttyB`) aparece no terminal.
+
+No Windows, o equivalente é criar um par de portas COM virtuais com o
+[com0com](https://com0com.sourceforge.net).
 
 ## Estrutura
 
