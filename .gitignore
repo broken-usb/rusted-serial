@@ -25,3 +25,6 @@ rustc-ice-*.txt
 # Saída do empacotamento (workflow de release)
 dist/
 pkg/
+AppDir/
+/appimagetool
+/runtime-x86_64

@@ -74,7 +74,7 @@ jobs:
           echo "A versão ${TAG} ainda não foi lançada."
 
   build-linux:
-    name: Linux (.tar.gz, .deb, .rpm)
+    name: Linux (AppImage, .deb, .rpm, .tar.gz)
     needs: preparar
     runs-on: ubuntu-latest
     # Compila numa glibc antiga (2.35) para o binário rodar em mais distribuições:
@@ -82,6 +82,12 @@ jobs:
     container: ubuntu:22.04
     env:
       VERSION: ${{ needs.preparar.outputs.version }}
+      # Ferramentas do AppImage em versões fixas, conferidas por SHA-256 (o Dependabot
+      # não atualiza estas: troque versão e hash juntos, à mão).
+      APPIMAGETOOL_VERSION: "1.9.1"
+      APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+      APPIMAGE_RUNTIME_VERSION: "20251108"
+      APPIMAGE_RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
     steps:
       - name: Ferramentas de compilação
         run: |
@@ -110,6 +116,17 @@ jobs:
       - name: Instalar cargo-generate-rpm
         run: cargo install cargo-generate-rpm --version 0.21.1 --locked
 
+      - name: Baixar appimagetool e runtime do AppImage
+        run: |
+          base=https://github.com/AppImage
+          curl -fsSL -o appimagetool "${base}/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-x86_64.AppImage"
+          curl -fsSL -o runtime-x86_64 "${base}/type2-runtime/releases/download/${APPIMAGE_RUNTIME_VERSION}/runtime-x86_64"
+          # Falha se os arquivos não forem exatamente os conferidos.
+          printf '%s  %s\n' \
+            "$APPIMAGETOOL_SHA256" appimagetool \
+            "$APPIMAGE_RUNTIME_SHA256" runtime-x86_64 | sha256sum -c -
+          chmod +x appimagetool
+
       - name: Testes
         run: cargo test --locked
 
@@ -128,6 +145,19 @@ jobs:
           # .deb e .rpm, com atalho no menu e ícone
           cargo deb --no-build --output dist/
           cargo generate-rpm --output dist/
+          # AppImage portátil: um arquivo só, roda sem instalar
+          appdir=AppDir
+          install -Dm755 target/release/rusted-serial "${appdir}/usr/bin/rusted-serial"
+          install -Dm644 assets/rusted-serial.desktop "${appdir}/usr/share/applications/rusted-serial.desktop"
+          install -Dm644 assets/icon.png "${appdir}/usr/share/icons/hicolor/512x512/apps/rusted-serial.png"
+          install -Dm644 assets/icon.svg "${appdir}/usr/share/icons/hicolor/scalable/apps/rusted-serial.svg"
+          cp assets/rusted-serial.desktop "${appdir}/"
+          cp assets/icon.png "${appdir}/rusted-serial.png"
+          ln -s rusted-serial.png "${appdir}/.DirIcon"
+          ln -s usr/bin/rusted-serial "${appdir}/AppRun"
+          # Contêineres não têm FUSE: o appimagetool roda extraído.
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 ./appimagetool --runtime-file runtime-x86_64 \
+            "${appdir}" "dist/rusted-serial-${VERSION}-x86_64.AppImage"
           ls -l dist
 
       - name: Guardar os pacotes

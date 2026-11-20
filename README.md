@@ -28,12 +28,15 @@ Baixe a versão mais recente em [**Releases**](../../releases/latest):
 | Sistema | Arquivo | Como usar |
 |---|---|---|
 | Windows | `rusted-serial-X.Y.Z-windows-x86_64.exe` | Portátil: é só abrir. Não instala nada nem pede administrador |
+| Linux, qualquer distribuição | `rusted-serial-X.Y.Z-x86_64.AppImage` | Portátil: `chmod +x rusted-serial-*.AppImage` e abra |
 | Debian, Ubuntu, Mint… | `rusted-serial_X.Y.Z-1_amd64.deb` | `sudo apt install ./rusted-serial_*.deb` |
 | Fedora, openSUSE | `rusted-serial-X.Y.Z-1.x86_64.rpm` | `sudo dnf install ./rusted-serial-*.rpm` (openSUSE: `sudo zypper install ./…`) |
-| Outras distribuições | `rusted-serial-X.Y.Z-linux-x86_64.tar.gz` | Extraia e rode `./rusted-serial` |
+| Linux, sem AppImage | `rusted-serial-X.Y.Z-linux-x86_64.tar.gz` | Extraia e rode `./rusted-serial` |
 
-- No Linux, os pacotes funcionam no Ubuntu 22.04, Debian 12 ou mais novos (glibc 2.35+), e
+- No Linux, os arquivos funcionam no Ubuntu 22.04, Debian 12 ou mais novos (glibc 2.35+), e
   você ainda precisa da [permissão para usar as portas](#permissão-para-usar-as-portas).
+- O AppImage usa o FUSE, que já vem na maioria dos desktops. Se ele não abrir, rode
+  `./rusted-serial-*.AppImage --appimage-extract-and-run`.
 - No Windows, o SmartScreen pode avisar que o app é desconhecido, porque o executável não é
   assinado digitalmente: clique em **Mais informações → Executar assim mesmo**.
 - Para conferir se o download não foi corrompido ou alterado:

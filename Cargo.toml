@@ -39,7 +39,7 @@ needless_collect = "warn"
 
 # Pacote .deb (Debian, Ubuntu, Mint…), gerado pelo `cargo deb` no workflow de release.
 [package.metadata.deb]
-maintainer = "broken-usb"
+maintainer = "broken-usb <50057556+broken-usb@users.noreply.github.com>"
 copyright = "2026, broken-usb"
 license-file = ["LICENSE", "0"]
 section = "electronics"
