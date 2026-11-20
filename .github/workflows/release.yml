@@ -90,10 +90,11 @@ jobs:
       APPIMAGE_RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
     steps:
       - name: Ferramentas de compilação
+        # file: exigido pelo appimagetool (o resto que ele usa já vem embutido nele)
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential pkg-config libudev-dev curl ca-certificates git
+            build-essential pkg-config libudev-dev curl ca-certificates git file
 
       - name: Baixar o código
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
