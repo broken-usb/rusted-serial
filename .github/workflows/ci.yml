@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch: # permite rodar manualmente pela aba "Actions"
+
+permissions:
+  contents: read
+
+# Um push novo na mesma branch cancela a execução anterior que ainda estiver rodando.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false # se um sistema falhar, o outro continua (para ver os dois erros)
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+            bin: rusted-serial
+          - name: Windows
+            os: windows-latest
+            bin: rusted-serial.exe
+
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v7
+
+      - name: Dependências do sistema (Linux)
+        if: runner.os == 'Linux'
+        # libudev: listagem de portas do crate serialport (no Fedora: systemd-devel)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libudev-dev pkg-config
+
+      - name: Instalar Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache do Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Formatação (cargo fmt)
+        if: runner.os == 'Linux' # o resultado é igual nos dois sistemas
+        run: cargo fmt --all --check
+
+      - name: Lint (cargo clippy)
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Testes
+        run: cargo test --locked
+
+      - name: Build de release
+        run: cargo build --locked --release
+
+      - name: Publicar o executável
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusted-serial-${{ runner.os }}
+          path: target/release/${{ matrix.bin }}
+          retention-days: 14

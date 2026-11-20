@@ -2,10 +2,19 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
+mod fonts;
 mod serial;
+mod system;
 mod theme;
 
 fn main() -> eframe::Result {
+    // Lê tema e fontes do sistema em paralelo com a abertura da janela.
+    let startup = std::thread::spawn(|| {
+        let prefs = system::read();
+        let fonts = fonts::load(prefs.ui_font.as_ref(), prefs.mono_font.as_ref());
+        (prefs, fonts)
+    });
+
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Rusted Serial")
@@ -18,6 +27,9 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Rusted Serial",
         options,
-        Box::new(|cc| Ok(Box::new(app::SerialApp::new(cc)))),
+        Box::new(move |cc| {
+            let (prefs, fonts) = startup.join().unwrap_or_default();
+            Ok(Box::new(app::SerialApp::new(cc, prefs, fonts)))
+        }),
     )
 }

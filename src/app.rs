@@ -4,11 +4,13 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{
     self, Align, Color32, CornerRadius, FontId, Layout, Margin, RichText, Sense, Stroke,
-    TextFormat, text::LayoutJob,
+    TextFormat, TextStyle, text::LayoutJob,
 };
 
+use crate::fonts::SystemFonts;
 use crate::serial::{Connection, DataBits, Event, FlowControl, Parity, PortConfig, StopBits};
-use crate::theme::{self, Palette, Scheme};
+use crate::system::SystemPrefs;
+use crate::theme::{Palette, Scheme};
 
 const BAUD_RATES: &[u32] = &[
     300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600,
@@ -92,6 +94,10 @@ impl Line {
 
 pub struct SerialApp {
     pal: Palette,
+    /// Barra superior em duas linhas (fonte grande ou janela estreita).
+    header_compact: bool,
+    /// Fontes do sistema em uso (interface, monoespaçada), mostradas no rodapé.
+    font_names: (Option<String>, Option<String>),
 
     // Configuração
     ports: Vec<String>,
@@ -124,9 +130,8 @@ pub struct SerialApp {
 }
 
 impl SerialApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Tema: lido uma única vez aqui.
-        let sys = theme::read_system();
+    pub fn new(cc: &eframe::CreationContext<'_>, sys: SystemPrefs, fonts: SystemFonts) -> Self {
+        // Tema e fontes: lidos uma única vez, ao iniciar (veja `main`).
         let scheme = sys
             .scheme
             .unwrap_or_else(|| match cc.egui_ctx.system_theme() {
@@ -135,10 +140,17 @@ impl SerialApp {
             });
         let pal = Palette::new(scheme, sys.accent);
         pal.apply(&cc.egui_ctx);
+        let font_names = (
+            fonts.ui.as_ref().map(|f| f.family.clone()),
+            fonts.mono.as_ref().map(|f| f.family.clone()),
+        );
+        crate::fonts::apply(&cc.egui_ctx, fonts);
 
         let ports = crate::serial::list_ports();
         Self {
             pal,
+            header_compact: false,
+            font_names,
             port: ports.first().cloned().unwrap_or_default(),
             ports,
             custom_port: String::new(),
@@ -338,118 +350,165 @@ impl SerialApp {
 
     // ───────────── Partes da tela ─────────────
 
+    /// Barra superior. Em uma linha quando cabe; em duas quando a fonte do
+    /// sistema é grande ou a janela é estreita (decidido pelas larguras medidas).
     fn header(&mut self, ui: &mut egui::Ui) {
+        let avail = ui.available_width();
+        let compact = self.header_compact;
+        let (mut brand, mut config, mut actions) = (0.0, 0.0, 0.0);
+        if compact {
+            ui.horizontal(|ui| {
+                brand = self.header_brand(ui);
+                actions = self.header_actions(ui);
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| config = self.header_config(ui));
+        } else {
+            ui.horizontal(|ui| {
+                brand = self.header_brand(ui);
+                config = self.header_config(ui);
+                actions = self.header_actions(ui);
+            });
+        }
+        let fits = brand + config + actions + 24.0 <= avail;
+        if fits == compact {
+            self.header_compact = !fits;
+            // Refaz o quadro antes de mostrar, para não "piscar" o layout errado.
+            ui.ctx().request_discard("layout da barra superior");
+        }
+    }
+
+    fn header_brand(&self, ui: &mut egui::Ui) -> f32 {
+        let w = ui
+            .horizontal(|ui| {
+                logo(ui, &self.pal);
+                ui.label(
+                    RichText::new("Rusted Serial")
+                        .strong()
+                        .text_style(TextStyle::Heading),
+                );
+            })
+            .response
+            .rect
+            .width();
+        ui.add_space(12.0);
+        w + 12.0
+    }
+
+    fn header_config(&mut self, ui: &mut egui::Ui) -> f32 {
         let p = self.pal.clone();
         let connected = self.conn.is_some();
-
-        ui.horizontal(|ui| {
-            logo(ui, &p);
-            ui.label(RichText::new("Rusted Serial").strong().size(15.0));
-            ui.add_space(12.0);
-
-            ui.add_enabled_ui(!connected, |ui| {
-                ui.label(RichText::new("Porta").color(p.muted));
-                egui::ComboBox::from_id_salt("port")
-                    .width(150.0)
-                    // não fecha ao clicar no campo "Outra porta…"
-                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                    .selected_text(if self.port.is_empty() {
-                        "—"
-                    } else {
-                        self.port.as_str()
-                    })
-                    .show_ui(ui, |ui| {
-                        if self.ports.is_empty() {
-                            ui.label(RichText::new("Nenhuma porta encontrada").color(p.muted));
-                        }
-                        for name in &self.ports {
-                            ui.selectable_value(&mut self.port, name.clone(), name);
-                        }
-                        // Caminho digitado à mão: /dev/pts/N (socat), /dev/rfcomm0, COM10…
-                        ui.separator();
-                        ui.label(RichText::new("Outra porta…").size(12.0).color(p.muted));
-                        ui.horizontal(|ui| {
-                            let resp = ui.add(
-                                egui::TextEdit::singleline(&mut self.custom_port)
-                                    .hint_text("/dev/pts/3 ou COM10")
-                                    .desired_width(150.0),
-                            );
-                            let enter =
-                                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                            if (ui.button("Usar").clicked() || enter)
-                                && !self.custom_port.trim().is_empty()
-                            {
-                                self.port = self.custom_port.trim().to_string();
-                                ui.close();
-                            }
-                        });
-                    });
-                if ui.button("⟳").on_hover_text("Atualizar portas").clicked() {
-                    self.ports = crate::serial::list_ports();
-                    if !self.ports.contains(&self.port) {
-                        self.port = self.ports.first().cloned().unwrap_or_default();
-                    }
-                }
-
-                ui.add_space(6.0);
-                ui.label(RichText::new("Baud").color(p.muted));
-                egui::ComboBox::from_id_salt("baud")
-                    .width(80.0)
-                    .selected_text(self.baud.to_string())
-                    .show_ui(ui, |ui| {
-                        for &b in BAUD_RATES {
-                            ui.selectable_value(&mut self.baud, b, b.to_string());
-                        }
-                    });
-
-                ui.add_space(6.0);
-                ui.label(RichText::new("Formato").color(p.muted));
-                egui::ComboBox::from_id_salt("format")
-                    .width(56.0)
-                    .selected_text(FORMATS[self.format].0)
-                    .show_ui(ui, |ui| {
-                        for (i, f) in FORMATS.iter().enumerate() {
-                            ui.selectable_value(&mut self.format, i, f.0);
-                        }
-                    });
-
-                ui.add_space(6.0);
-                ui.label(RichText::new("Fluxo").color(p.muted));
-                egui::ComboBox::from_id_salt("flow")
-                    .width(84.0)
-                    .selected_text(FLOWS[self.flow].0)
-                    .show_ui(ui, |ui| {
-                        for (i, f) in FLOWS.iter().enumerate() {
-                            ui.selectable_value(&mut self.flow, i, f.0);
-                        }
-                    });
-            });
-
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if connected {
-                    if ui
-                        .add(
-                            egui::Button::new(RichText::new("■  Desconectar").strong())
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::new(1.0, p.border)),
-                        )
-                        .clicked()
-                    {
-                        self.disconnect();
-                    }
+        ui.add_enabled_ui(!connected, |ui| {
+            ui.label(RichText::new("Porta").color(p.muted));
+            egui::ComboBox::from_id_salt("port")
+                .width(150.0)
+                // não fecha ao clicar no campo "Outra porta…"
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .selected_text(if self.port.is_empty() {
+                    "—"
                 } else {
-                    let can = !self.port.is_empty();
-                    if ui
-                        .add_enabled(can, accent_button(&p, "▶  Conectar"))
-                        .clicked()
-                    {
-                        self.connect(ui.ctx());
+                    self.port.as_str()
+                })
+                .show_ui(ui, |ui| {
+                    if self.ports.is_empty() {
+                        ui.label(RichText::new("Nenhuma porta encontrada").color(p.muted));
                     }
+                    for name in &self.ports {
+                        ui.selectable_value(&mut self.port, name.clone(), name);
+                    }
+                    // Caminho digitado à mão: /dev/pts/N (socat), /dev/rfcomm0, COM10…
+                    ui.separator();
+                    ui.label(RichText::new("Outra porta…").small().color(p.muted));
+                    ui.horizontal(|ui| {
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.custom_port)
+                                .hint_text("/dev/pts/3 ou COM10")
+                                .desired_width(150.0),
+                        );
+                        let enter =
+                            resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if (ui.button("Usar").clicked() || enter)
+                            && !self.custom_port.trim().is_empty()
+                        {
+                            self.port = self.custom_port.trim().to_string();
+                            ui.close();
+                        }
+                    });
+                });
+            if ui.button("⟳").on_hover_text("Atualizar portas").clicked() {
+                self.ports = crate::serial::list_ports();
+                if !self.ports.contains(&self.port) {
+                    self.port = self.ports.first().cloned().unwrap_or_default();
                 }
-                ui.add_space(4.0);
-                self.status_pill(ui);
-            });
-        });
+            }
+
+            ui.add_space(6.0);
+            ui.label(RichText::new("Baud").color(p.muted));
+            egui::ComboBox::from_id_salt("baud")
+                .width(80.0)
+                .selected_text(self.baud.to_string())
+                .show_ui(ui, |ui| {
+                    for &b in BAUD_RATES {
+                        ui.selectable_value(&mut self.baud, b, b.to_string());
+                    }
+                });
+
+            ui.add_space(6.0);
+            ui.label(RichText::new("Formato").color(p.muted));
+            egui::ComboBox::from_id_salt("format")
+                .width(56.0)
+                .selected_text(FORMATS[self.format].0)
+                .show_ui(ui, |ui| {
+                    for (i, f) in FORMATS.iter().enumerate() {
+                        ui.selectable_value(&mut self.format, i, f.0);
+                    }
+                });
+
+            ui.add_space(6.0);
+            ui.label(RichText::new("Fluxo").color(p.muted));
+            egui::ComboBox::from_id_salt("flow")
+                .width(84.0)
+                .selected_text(FLOWS[self.flow].0)
+                .show_ui(ui, |ui| {
+                    for (i, f) in FLOWS.iter().enumerate() {
+                        ui.selectable_value(&mut self.flow, i, f.0);
+                    }
+                });
+        })
+        .response
+        .rect
+        .width()
+    }
+
+    fn header_actions(&mut self, ui: &mut egui::Ui) -> f32 {
+        let p = self.pal.clone();
+        let connected = self.conn.is_some();
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if connected {
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("■  Desconectar").strong())
+                            .fill(Color32::TRANSPARENT)
+                            .stroke(Stroke::new(1.0, p.border)),
+                    )
+                    .clicked()
+                {
+                    self.disconnect();
+                }
+            } else {
+                let can = !self.port.is_empty();
+                if ui
+                    .add_enabled(can, accent_button(&p, "▶  Conectar"))
+                    .clicked()
+                {
+                    self.connect(ui.ctx());
+                }
+            }
+            ui.add_space(4.0);
+            self.status_pill(ui);
+            ui.min_rect().width()
+        })
+        .inner
     }
 
     fn status_pill(&self, ui: &mut egui::Ui) {
@@ -472,12 +531,15 @@ impl SerialApp {
             None => (p.idle_bg, p.faint, p.muted, "Desconectado".to_string()),
         };
         // Desenhado à mão para ter exatamente o tamanho do conteúdo.
-        let font = FontId::proportional(13.0);
+        let font = TextStyle::Body.resolve(ui.style());
         let galley = ui.painter().layout_no_wrap(label, font, text);
-        let size = egui::vec2(12.0 + 8.0 + 7.0 + galley.size().x + 14.0, 26.0);
+        let size = egui::vec2(
+            12.0 + 8.0 + 7.0 + galley.size().x + 14.0,
+            (galley.size().y + 11.0).max(26.0),
+        );
         let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
         let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::same(13), bg);
+        painter.rect_filled(rect, CornerRadius::same((rect.height() / 2.0) as u8), bg);
         painter.circle_filled(egui::pos2(rect.left() + 16.0, rect.center().y), 4.0, dot);
         let text_pos = egui::pos2(rect.left() + 27.0, rect.center().y - galley.size().y / 2.0);
         painter.galley(text_pos, galley, text);
@@ -527,7 +589,7 @@ impl SerialApp {
                     .hline(r.x_range(), r.top(), Stroke::new(1.0, p.border));
 
                 // Linhas (só as visíveis são desenhadas: rápido mesmo com 100 mil linhas)
-                let font = FontId::monospace(13.0);
+                let font = TextStyle::Monospace.resolve(ui.style());
                 let row_h = ui.fonts_mut(|f| f.row_height(&font));
                 ui.add_space(8.0);
                 ui.spacing_mut().item_spacing.y = 4.0; // espaço entre linhas
@@ -607,12 +669,7 @@ impl SerialApp {
                 .show(ui, |ui| {
                     ui.set_width(field_w - 26.0);
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("›")
-                                .monospace()
-                                .size(15.0)
-                                .color(p.accent_text),
-                        );
+                        ui.label(RichText::new("›").monospace().strong().color(p.accent_text));
                         let hint = if self.send_as_hex {
                             "Bytes em HEX, ex.: AA 01 FF"
                         } else {
@@ -667,7 +724,7 @@ impl SerialApp {
         let p = &self.pal;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 18.0;
-            let small = |s: String, c: Color32| RichText::new(s).size(12.0).color(c);
+            let small = |s: String, c: Color32| RichText::new(s).small().color(c);
             if self.conn.is_some() {
                 ui.label(small(self.config_label(), p.muted));
             } else {
@@ -691,7 +748,13 @@ impl SerialApp {
                 } else {
                     "destaque padrão"
                 };
-                ui.label(small(format!("Tema {scheme} · {src}"), p.muted));
+                let fonts = format!(
+                    "Fonte da interface: {}\nFonte do terminal: {}",
+                    self.font_names.0.as_deref().unwrap_or("padrão do egui"),
+                    self.font_names.1.as_deref().unwrap_or("padrão do egui"),
+                );
+                ui.label(small(format!("Tema {scheme} · {src}"), p.muted))
+                    .on_hover_text(fonts);
                 let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
                 ui.painter().circle_filled(r.center(), 5.0, p.accent);
             });

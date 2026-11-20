@@ -7,6 +7,7 @@ edition = "2024"
 eframe = "0.37.0"
 serialport = "4.10.1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+fontique = { version = "0.11", features = ["fontconfig-dlopen"] }
 
 # Leitura do tema do sistema (cor de destaque + claro/escuro)
 [target.'cfg(target_os = "linux")'.dependencies]
