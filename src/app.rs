@@ -419,21 +419,14 @@ impl SerialApp {
         }
     }
 
+    /// Só o logo: o nome já aparece na barra de título da janela.
     fn header_brand(&self, ui: &mut egui::Ui) -> f32 {
-        let w = ui
-            .horizontal(|ui| {
-                logo(ui, &self.pal);
-                ui.label(
-                    RichText::new("Rusted Serial")
-                        .strong()
-                        .text_style(TextStyle::Heading),
-                );
-            })
-            .response
+        let w = logo(ui, &self.pal)
+            .on_hover_text(concat!("Rusted Serial ", env!("CARGO_PKG_VERSION")))
             .rect
             .width();
-        ui.add_space(12.0);
-        w + 12.0
+        ui.add_space(6.0);
+        w + 6.0
     }
 
     fn header_config(&mut self, ui: &mut egui::Ui) -> f32 {
@@ -944,8 +937,9 @@ impl eframe::App for SerialApp {
 // ───────────── Componentes ─────────────
 
 /// Quadradinho com a cor de destaque e o símbolo de terminal.
-fn logo(ui: &mut egui::Ui, p: &Palette) {
-    let (r, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::hover());
+fn logo(ui: &mut egui::Ui, p: &Palette) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, "Rusted Serial"));
     let painter = ui.painter();
     painter.rect_filled(r, CornerRadius::same(7), p.accent);
     let s = Stroke::new(2.2, p.on_accent);
@@ -953,6 +947,7 @@ fn logo(ui: &mut egui::Ui, p: &Palette) {
     painter.line_segment([c + egui::vec2(-7.0, -5.0), c + egui::vec2(-2.0, 0.0)], s);
     painter.line_segment([c + egui::vec2(-2.0, 0.0), c + egui::vec2(-7.0, 5.0)], s);
     painter.line_segment([c + egui::vec2(1.0, 6.0), c + egui::vec2(8.0, 6.0)], s);
+    resp
 }
 
 /// Botões segmentados (ex.: Texto | HEX). Leitores de tela anunciam qual está ativo.

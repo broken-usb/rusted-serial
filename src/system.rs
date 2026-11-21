@@ -1,7 +1,10 @@
 //! Preferências do sistema operacional, lidas UMA vez ao iniciar o app.
 //!
-//! - Linux: portal `org.freedesktop.portal.Settings` via D-Bus
-//!   (claro/escuro, cor de destaque e as fontes do GNOME ou do KDE).
+//! - Linux: portal `org.freedesktop.portal.Settings` via D-Bus (claro/escuro e
+//!   cor de destaque). Funciona onde o portal do ambiente responde essas
+//!   chaves: GNOME, KDE, COSMIC (`xdg-desktop-portal-cosmic`) e Cinnamon
+//!   (`xdg-desktop-portal-xapp` 1.1.1 ou mais novo). As fontes vêm de onde cada
+//!   ambiente as guarda (veja [`Desktop`]).
 //! - Windows: registro do usuário (claro/escuro e cor de destaque). As fontes
 //!   do Windows são achadas pelo `fonts.rs` (fonte de interface do sistema).
 
@@ -38,8 +41,13 @@ pub fn read() -> SystemPrefs {
 // ───────────────────────────── Linux ─────────────────────────────
 #[cfg(target_os = "linux")]
 mod platform {
-    use super::{FontSpec, Scheme, SystemPrefs, parse_gnome_font, parse_kde_font};
+    use super::{
+        Desktop, FontSpec, Scheme, SystemPrefs, detect_desktop, parse_cosmic_font,
+        parse_gnome_font, parse_gvariant_string, parse_kde_font,
+    };
     use eframe::egui::Color32;
+    use std::path::PathBuf;
+    use std::process::{Command, Stdio};
     use zbus::blocking::Connection;
     use zbus::zvariant::{OwnedValue, Value};
 
@@ -50,6 +58,7 @@ mod platform {
     const APPEARANCE: &str = "org.freedesktop.appearance";
     const GNOME: &str = "org.gnome.desktop.interface";
     const KDE: &str = "org.kde.kdeglobals.General";
+    const CINNAMON: &str = "org.cinnamon.desktop.interface";
 
     pub fn read() -> SystemPrefs {
         let Ok(conn) = Connection::session() else {
@@ -76,14 +85,32 @@ mod platform {
                 Color32::from_rgb(c(r), c(g), c(b))
             });
 
-        // Fontes: GNOME ("Adwaita Sans 11") ou KDE ("Noto Sans,10,-1,5,400,...")
-        let font = |gnome_key: &str, kde_key: &str| -> Option<FontSpec> {
-            string(GNOME, gnome_key)
-                .and_then(|s| parse_gnome_font(&s))
-                .or_else(|| string(KDE, kde_key).and_then(|s| parse_kde_font(&s)))
+        // Fontes: GNOME ("Adwaita Sans 11") ou KDE ("Noto Sans,10,-1,5,400,...").
+        // O portal GTK responde as chaves do GNOME em qualquer ambiente (com o
+        // padrão do GNOME se ninguém mexeu), então a ordem depende do ambiente.
+        let gnome = |key: &str| string(GNOME, key).and_then(|s| parse_gnome_font(&s));
+        let kde = |key: &str| string(KDE, key).and_then(|s| parse_kde_font(&s));
+        let desktop = detect_desktop(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default());
+        let (ui_font, mono_font) = match desktop {
+            // O KDE copia a fonte geral para o GNOME, mas não a monoespaçada.
+            Desktop::Kde => (
+                kde("font").or_else(|| gnome("font-name")),
+                kde("fixed").or_else(|| gnome("monospace-font-name")),
+            ),
+            // A fonte da interface fica no esquema do Cinnamon, que nenhum
+            // portal expõe; a monoespaçada fica no do GNOME.
+            Desktop::Cinnamon => (
+                gsettings(CINNAMON, "font-name")
+                    .and_then(|s| parse_gnome_font(&s))
+                    .or_else(|| gnome("font-name")),
+                gnome("monospace-font-name"),
+            ),
+            Desktop::Cosmic => cosmic_fonts(scheme),
+            Desktop::Other => (
+                gnome("font-name").or_else(|| kde("font")),
+                gnome("monospace-font-name").or_else(|| kde("fixed")),
+            ),
         };
-        let ui_font = font("font-name", "font");
-        let mono_font = font("monospace-font-name", "fixed");
 
         SystemPrefs {
             scheme,
@@ -92,6 +119,66 @@ mod platform {
             mono_font,
         }
         // `conn` é descartada aqui: nada continua rodando em segundo plano.
+    }
+
+    /// `gsettings get` (o dconf não tem API de leitura no D-Bus).
+    fn gsettings(schema: &str, key: &str) -> Option<String> {
+        let out = Command::new("gsettings")
+            .args(["get", schema, key])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())?;
+        parse_gvariant_string(String::from_utf8(out.stdout).ok()?.trim())
+    }
+
+    /// COSMIC guarda as fontes em arquivos RON próprios:
+    /// - Epoch 1: `com.system76.CosmicTk/v1/{interface_font,monospace_font}`;
+    /// - versões seguintes: `com.system76.CosmicTheme.{Dark,Light}/v1/{font,mono_font}`.
+    ///
+    /// Primeiro em `~/.config/cosmic`, depois nos padrões do sistema
+    /// (`/usr/share/cosmic`). Sem nenhum arquivo, valem os padrões do COSMIC.
+    /// Ele não tem ajuste de tamanho de fonte.
+    fn cosmic_fonts(scheme: Option<Scheme>) -> (Option<FontSpec>, Option<FontSpec>) {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let config = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| home.map(|h| h.join(".config")));
+        let data_dirs = std::env::var_os("XDG_DATA_DIRS")
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+        let roots: Vec<PathBuf> = config
+            .into_iter()
+            .chain(std::env::split_paths(&data_dirs))
+            .filter(|p| p.is_absolute())
+            .map(|p| p.join("cosmic"))
+            .collect();
+        let theme = match scheme {
+            Some(Scheme::Light) => "com.system76.CosmicTheme.Light",
+            _ => "com.system76.CosmicTheme.Dark",
+        };
+        let find = |tk_key: &str, theme_key: &str, default: &str| -> Option<FontSpec> {
+            let family = roots
+                .iter()
+                .flat_map(|root| {
+                    [
+                        root.join("com.system76.CosmicTk/v1").join(tk_key),
+                        root.join(theme).join("v1").join(theme_key),
+                    ]
+                })
+                .find_map(|path| parse_cosmic_font(&std::fs::read_to_string(path).ok()?))
+                .unwrap_or_else(|| default.to_string());
+            Some(FontSpec {
+                family,
+                size_pt: None,
+            })
+        };
+        (
+            find("interface_font", "font", "Open Sans"),
+            find("monospace_font", "mono_font", "Noto Sans Mono"),
+        )
     }
 
     fn read_setting(conn: &Connection, ns: &str, key: &str) -> Option<OwnedValue> {
@@ -192,6 +279,58 @@ pub fn parse_gnome_font(s: &str) -> Option<FontSpec> {
     (!family.is_empty()).then_some(FontSpec { family, size_pt })
 }
 
+/// Ambiente gráfico, pelo `XDG_CURRENT_DESKTOP` ("KDE", "X-Cinnamon",
+/// "COSMIC", "ubuntu:GNOME"...). Decide de onde vêm as fontes.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Desktop {
+    Kde,
+    Cinnamon,
+    Cosmic,
+    /// GNOME e os demais: chaves do GNOME, depois as do KDE.
+    Other,
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub fn detect_desktop(value: &str) -> Desktop {
+    value
+        .split(':')
+        .find_map(|name| match name.trim().to_ascii_lowercase().as_str() {
+            "kde" => Some(Desktop::Kde),
+            "x-cinnamon" | "cinnamon" => Some(Desktop::Cinnamon),
+            "cosmic" => Some(Desktop::Cosmic),
+            _ => None,
+        })
+        .unwrap_or(Desktop::Other)
+}
+
+/// Saída do `gsettings get`: `'Ubuntu 10'` (ou `"..."` se o texto tiver `'`).
+#[cfg(any(target_os = "linux", test))]
+pub fn parse_gvariant_string(s: &str) -> Option<String> {
+    let s = s.strip_prefix("@s ").unwrap_or(s);
+    let quote = s.chars().next().filter(|c| matches!(c, '\'' | '"'))?;
+    let inner = s.strip_prefix(quote)?.strip_suffix(quote)?;
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        out.push(if c == '\\' { chars.next()? } else { c });
+    }
+    (!out.trim().is_empty()).then_some(out)
+}
+
+/// Arquivo RON do COSMIC: `(family: "Open Sans", weight: Normal, ...)`.
+#[cfg(any(target_os = "linux", test))]
+pub fn parse_cosmic_font(ron: &str) -> Option<String> {
+    let rest = &ron[ron.find("family")? + "family".len()..];
+    let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+    let rest = rest
+        .strip_prefix("Some(")
+        .unwrap_or(rest)
+        .strip_prefix('"')?;
+    let family = rest[..rest.find('"')?].trim();
+    (!family.is_empty()).then(|| family.to_string())
+}
+
 /// KDE/Qt: "Noto Sans,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1".
 #[cfg(any(target_os = "linux", test))]
 pub fn parse_kde_font(s: &str) -> Option<FontSpec> {
@@ -250,6 +389,68 @@ mod tests {
         #[test]
         fn texto_vazio_nao_e_fonte() {
             assert_eq!(parse_gnome_font(""), None);
+        }
+    }
+
+    mod detect_desktop {
+        use super::*;
+
+        #[test]
+        fn reconhece_os_ambientes() {
+            assert_eq!(detect_desktop("KDE"), Desktop::Kde);
+            assert_eq!(detect_desktop("X-Cinnamon"), Desktop::Cinnamon);
+            assert_eq!(detect_desktop("COSMIC"), Desktop::Cosmic);
+            assert_eq!(detect_desktop("ubuntu:GNOME"), Desktop::Other);
+            assert_eq!(detect_desktop(""), Desktop::Other);
+        }
+
+        #[test]
+        fn olha_todos_os_nomes_da_lista() {
+            assert_eq!(detect_desktop("pop:COSMIC"), Desktop::Cosmic);
+        }
+    }
+
+    mod parse_gvariant_string {
+        use super::*;
+
+        #[test]
+        fn tira_as_aspas() {
+            assert_eq!(
+                parse_gvariant_string("'Ubuntu 10'").as_deref(),
+                Some("Ubuntu 10")
+            );
+        }
+
+        #[test]
+        fn aceita_aspas_duplas_e_escapes() {
+            assert_eq!(
+                parse_gvariant_string(r#""Joe's Sans 9""#).as_deref(),
+                Some("Joe's Sans 9")
+            );
+            assert_eq!(parse_gvariant_string(r"'A\'B 9'").as_deref(), Some("A'B 9"));
+        }
+
+        #[test]
+        fn recusa_o_que_nao_e_texto() {
+            assert_eq!(parse_gvariant_string("10"), None);
+            assert_eq!(parse_gvariant_string("''"), None);
+            assert_eq!(parse_gvariant_string("'sem fim"), None);
+        }
+    }
+
+    mod parse_cosmic_font {
+        use super::*;
+
+        #[test]
+        fn le_a_familia() {
+            let ron = "(\n    family: \"Fira Sans\",\n    weight: Normal,\n    stretch: Normal,\n    style: Normal,\n)";
+            assert_eq!(parse_cosmic_font(ron).as_deref(), Some("Fira Sans"));
+        }
+
+        #[test]
+        fn arquivo_sem_familia_nao_e_fonte() {
+            assert_eq!(parse_cosmic_font("(weight: Bold)"), None);
+            assert_eq!(parse_cosmic_font("(family: \"\")"), None);
         }
     }
 

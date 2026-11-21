@@ -18,7 +18,7 @@
 - **Envio:** fim de linha configurável (CR, LF, CR+LF), envio em HEX (`AA 01 FF`) e histórico com ↑ ↓.
 - **Senhas protegidas:** quando o dispositivo pede `Password:`, o que você digita não aparece na tela, não entra no histórico e é salvo como `[senha oculta]` no log.
 - **Log:** salva a sessão em `~/rusted-serial-AAAAMMDD-HHMMSS.log`, legível só pelo seu usuário.
-- **Cara de nativo:** segue o modo claro/escuro, a cor de destaque e as fontes do sistema (GNOME, KDE e Windows).
+- **Cara de nativo:** segue o modo claro/escuro, a cor de destaque e as fontes do sistema (GNOME, KDE, COSMIC, Cinnamon e Windows).
 - **Portas virtuais:** aceita qualquer caminho em *Porta → Outra porta…* (`/dev/pts/3`, `/dev/rfcomm0`, `COM10`).
 
 ## Download
@@ -37,6 +37,14 @@ Baixe a versão mais recente em [**Releases**](../../releases/latest):
   você ainda precisa da [permissão para usar as portas](#permissão-para-usar-as-portas).
 - O AppImage usa o FUSE, que já vem na maioria dos desktops. Se ele não abrir, rode
   `./rusted-serial-*.AppImage --appimage-extract-and-run`.
+- No Wayland, a barra de título só mostra o ícone de um app que tem um arquivo `.desktop`.
+  Por isso o AppImage e o `.tar.gz` criam, ao abrir, um atalho oculto (fora do menu) em
+  `~/.local/share/applications/rusted-serial.desktop`, com o ícone em
+  `~/.local/share/rusted-serial/`. Se você instalar o `.deb`/`.rpm`, ele sai sozinho. Pode
+  apagar os dois quando quiser.
+- Cor de destaque no Cinnamon: vem do tema GTK escolhido e precisa do
+  `xdg-desktop-portal-xapp` 1.1.1 ou mais novo (Linux Mint 22.2+). Sem isso, o app usa o
+  laranja padrão.
 - No Windows, o SmartScreen pode avisar que o app é desconhecido, porque o executável não é
   assinado digitalmente: clique em **Mais informações → Executar assim mesmo**.
 - Para conferir se o download não foi corrompido ou alterado:
@@ -168,6 +176,7 @@ No Windows, o equivalente é criar um par de portas COM virtuais com o
 | `src/system.rs` | Lê tema, cor de destaque e fontes do sistema (uma vez, ao iniciar) |
 | `src/theme.rs` | Paleta tingida com a cor de destaque, com contraste mínimo garantido |
 | `src/fonts.rs` | Carrega as fontes do sistema |
+| `src/desktop_entry.rs` | No Linux, cria o atalho oculto que dá o ícone da janela no Wayland |
 | `build.rs` | No Windows, embute o ícone e a versão no `.exe` |
 
 ## Lançar uma versão
