@@ -1,6 +1,6 @@
 [package]
 name = "rusted-serial"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.95" # mínimo exigido pelo egui 0.37
 description = "Terminal serial nativo para Arduino, microcontroladores e switches, com SSH, Telnet, TCP e ADB"
