@@ -2,10 +2,10 @@
 Type=Application
 Name=Rusted Serial
 GenericName=Terminal Serial
-Comment=Terminal serial para Arduino, microcontroladores e switches gerenciáveis
+Comment=Terminal serial, SSH, Telnet, TCP e ADB para Arduino, microcontroladores e switches
 Exec=rusted-serial
 Icon=rusted-serial
 Terminal=false
 Categories=Development;Electronics;
-Keywords=serial;uart;tty;console;arduino;pic;switch;cisco;
+Keywords=serial;uart;tty;console;arduino;pic;switch;cisco;ssh;telnet;tcp;adb;android;
 StartupWMClass=rusted-serial

@@ -19,6 +19,8 @@ pub enum Icon {
     Trash,
     Send,
     Lock,
+    /// Círculo cortado: interromper (Ctrl+C).
+    Interrupt,
 }
 
 /// Aparência do botão.
@@ -91,6 +93,16 @@ pub fn paint(painter: &Painter, icon: Icon, rect: Rect, color: Color32) {
             line(&[(4.0, 4.5), (4.8, 13.5), (11.2, 13.5), (12.0, 4.5)]);
             line(&[(6.8, 7.0), (6.8, 11.0)]);
             line(&[(9.2, 7.0), (9.2, 11.0)]);
+        }
+        Icon::Interrupt => {
+            let ring: Vec<(f32, f32)> = (0..=28)
+                .map(|i| {
+                    let a = (360.0 * i as f32 / 28.0).to_radians();
+                    (8.0 + 5.5 * a.cos(), 8.0 + 5.5 * a.sin())
+                })
+                .collect();
+            line(&ring);
+            line(&[(4.1, 4.1), (11.9, 11.9)]);
         }
         Icon::Lock => {
             let body = Rect::from_min_max(p(3.5, 7.5), p(12.5, 13.5));

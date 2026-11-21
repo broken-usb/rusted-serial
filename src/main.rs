@@ -10,12 +10,14 @@
 // No Windows, não abre uma janela de console junto com o app (só no build release).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod ansi;
 mod app;
 #[cfg(target_os = "linux")]
 mod desktop_entry;
+mod echo;
 mod fonts;
 mod icons;
-mod serial;
+mod link;
 mod system;
 mod theme;
 

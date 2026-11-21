@@ -3,13 +3,16 @@ name = "rusted-serial"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95" # mínimo exigido pelo egui 0.37
-description = "Terminal serial nativo para Arduino, microcontroladores e switches gerenciáveis"
+description = "Terminal serial nativo para Arduino, microcontroladores e switches, com SSH, Telnet, TCP e ADB"
 license = "MIT"
 
 [dependencies]
 eframe = "0.37.0"
 serialport = "4.10.1"
-fontique = { version = "0.13", features = ["fontconfig-dlopen"] }
+fontique = { version = "0.11", features = ["fontconfig-dlopen"] }
+# SSH em Rust puro (ring: compila fácil também no Windows)
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
 jiff = "1.0.1"
 
 # Leitura do tema do sistema (cor de destaque + claro/escuro)
@@ -46,7 +49,8 @@ section = "electronics"
 priority = "optional"
 extended-description = """\
 Terminal serial nativo para Arduino, microcontroladores (PIC, AVR, ESP) e consoles \
-de switches gerenciáveis. Segue o tema, a cor de destaque e as fontes do sistema."""
+de switches gerenciáveis, com SSH, Telnet, TCP e shell de Android (ADB) embutidos. \
+Segue o tema, a cor de destaque e as fontes do sistema."""
 assets = [
     ["target/release/rusted-serial", "usr/bin/", "755"],
     ["assets/rusted-serial.desktop", "usr/share/applications/", "644"],
@@ -57,7 +61,7 @@ assets = [
 
 # Pacote .rpm (Fedora, openSUSE…), gerado pelo `cargo generate-rpm` no workflow de release.
 [package.metadata.generate-rpm]
-summary = "Terminal serial para Arduino, microcontroladores e switches gerenciáveis"
+summary = "Terminal serial, SSH, Telnet, TCP e ADB para Arduino, microcontroladores e switches"
 assets = [
     { source = "target/release/rusted-serial", dest = "/usr/bin/rusted-serial", mode = "755" },
     { source = "assets/rusted-serial.desktop", dest = "/usr/share/applications/rusted-serial.desktop", mode = "644" },
