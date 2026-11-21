@@ -9,7 +9,7 @@ license = "MIT"
 [dependencies]
 eframe = "0.37.0"
 serialport = "4.10.1"
-fontique = { version = "0.11", features = ["fontconfig-dlopen"] }
+fontique = { version = "0.13", features = ["fontconfig-dlopen"] }
 jiff = "1.0.1"
 
 # Leitura do tema do sistema (cor de destaque + claro/escuro)
