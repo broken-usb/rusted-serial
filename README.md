@@ -6,16 +6,19 @@
 
 <p align="center">
   Terminal serial nativo, leve e rápido, escrito em Rust.<br>
-  Para Arduino, microcontroladores (PIC, AVR, ESP…) e consoles de switches gerenciáveis.
+  Para Arduino, microcontroladores (PIC, AVR, ESP…) e consoles de switches gerenciáveis,<br>
+  com SSH, Telnet, TCP e ADB embutidos.
 </p>
 
 ![Rusted Serial conectado ao console de um switch](assets/screenshot.png)
 
 ## Recursos
 
-- **Conexão completa:** porta, baud (300 a 921600), formato (8N1, 7E1…) e controle de fluxo (RTS/CTS, XON/XOFF).
+- **Serial completa:** porta, baud (300 a 921600), formato (8N1, 7E1…) e controle de fluxo (RTS/CTS, XON/XOFF).
+- **Também por rede:** SSH, Telnet, TCP cru e shell de Android (ADB), sem instalar nada além do app (o ADB usa o `adb` do Android Platform-Tools). Veja [Conexões de rede](#conexões-de-rede).
+- **Cores ANSI:** cores de shells e de firmwares (logs do ESP32, por exemplo) aparecem coloridas; os outros códigos de terminal são limpos.
 - **Terminal:** horário em cada linha, o que você envia destacado, visão em texto ou HEX, rolagem automática e até 100 mil linhas sem perder velocidade.
-- **Envio:** fim de linha configurável (CR, LF, CR+LF), envio em HEX (`AA 01 FF`) e histórico com ↑ ↓.
+- **Envio:** fim de linha configurável (CR, LF, CR+LF), envio em HEX (`AA 01 FF`), histórico com ↑ ↓ e Ctrl+C (sem texto selecionado) para interromper o comando em execução.
 - **Senhas protegidas:** quando o dispositivo pede `Password:`, o que você digita não aparece na tela, não entra no histórico e é salvo como `[senha oculta]` no log.
 - **Log:** salva a sessão em `~/rusted-serial-AAAAMMDD-HHMMSS.log`, legível só pelo seu usuário.
 - **Cara de nativo:** segue o modo claro/escuro, a cor de destaque e as fontes do sistema (GNOME, KDE, COSMIC, Cinnamon e Windows).
@@ -50,6 +53,55 @@ Baixe a versão mais recente em [**Releases**](../../releases/latest):
 - Para conferir se o download não foi corrompido ou alterado:
   `sha256sum -c SHA256SUMS.txt --ignore-missing`.
 - Versões marcadas como **Pre-release** são de teste.
+
+## Conexões de rede
+
+Escolha o tipo no seletor do canto esquerdo da barra (**Serial ▾**). O terminal é em modo
+linha, como na serial: você digita o comando inteiro e envia com Enter. Comandos e logs
+funcionam bem; programas de tela cheia (`vim`, `htop`, `top`) não.
+
+| Tipo | Para quê | Porta padrão | Fim de linha |
+|---|---|---|---|
+| **SSH** | Servidores, Raspberry Pi, switches e roteadores modernos | 22 | CR |
+| **Telnet** | Switches e roteadores mais antigos | 23 | CR+LF |
+| **TCP** | Bytes crus: ser2net, ESP32/ESP8266 por Wi-Fi, conversor serial-Ethernet | — | CR+LF |
+| **ADB** | Shell e `logcat` de aparelhos Android, por USB ou Wi-Fi | — | CR |
+
+Em SSH, Telnet e ADB, o outro lado devolve cada comando digitado (eco). O app já mostra o
+que você enviou numa linha destacada, então esconde essa cópia.
+
+### SSH
+
+- **Chave do servidor:** na primeira conexão, o app mostra a impressão digital (SHA256) e
+  pergunta se você confia; ao confirmar, ela é salva no mesmo `~/.ssh/known_hosts` do
+  OpenSSH. Se a chave de um servidor conhecido mudar, a conexão é recusada, como no OpenSSH.
+- **Autenticação**, nesta ordem: sem senha (alguns equipamentos aceitam), agente SSH
+  (`ssh-agent` no Linux/macOS, serviço do OpenSSH no Windows), chaves padrão
+  (`~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`, pedindo a frase-senha se houver), teclado
+  interativo e senha. Senhas e frases-senha são digitadas no campo protegido e não ficam
+  guardadas.
+- **Equipamentos antigos:** se o servidor não aceitar nada melhor, o app ainda usa
+  algoritmos antigos que switches velhos exigem (DH group14/group1 com SHA-1, AES-CBC,
+  HMAC-SHA1, chaves `ssh-rsa`). Com servidores atuais eles nunca são escolhidos.
+- No campo Host dá para escrever `usuario@host` e deixar Usuário vazio.
+- O `~/.ssh/config` não é lido (apelidos de host, `ProxyJump` etc.).
+
+### ADB
+
+Usa o servidor do `adb` (o mesmo do comando `adb`), então vale a autorização de depuração
+já feita no aparelho. Precisa do `adb` instalado e no PATH; se o servidor estiver parado, o
+app o inicia.
+
+| Sistema | Como instalar o `adb` |
+|---|---|
+| Fedora | `sudo dnf install android-tools` |
+| Debian, Ubuntu, Mint… | `sudo apt install adb` |
+| Arch Linux | `sudo pacman -S android-tools` |
+| Windows, macOS ou qualquer outro | [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools) (no Windows, coloque a pasta no PATH) |
+
+- **USB:** ligue a *Depuração USB* nas opções do desenvolvedor e aceite o pedido no aparelho.
+- **Wi-Fi:** em *Aparelho → Por Wi-Fi…*, informe `IP:porta` (faz o mesmo que `adb connect`).
+- "Qualquer aparelho" usa o único conectado; com mais de um, escolha na lista.
 
 ## Compilar a partir do código
 
@@ -166,12 +218,18 @@ No app, use *Porta → Outra porta…* → `/tmp/ttyA`. O que for escrito em `/t
 No Windows, o equivalente é criar um par de portas COM virtuais com o
 [com0com](https://com0com.sourceforge.net).
 
+Para as conexões de rede, um servidor TCP de teste basta: `nc -l 3333` (ou `ncat -l 3333`)
+e conecte em TCP `127.0.0.1` porta `3333`. Para SSH, `localhost` com o seu usuário, se o
+servidor SSH estiver ativo.
+
 ## Estrutura
 
 | Arquivo | O que faz |
 |---|---|
-| `src/serial.rs` | Conexão com a porta numa thread própria, que nunca bloqueia a interface |
+| `src/link/` | Conexões, cada uma numa thread própria que nunca bloqueia a interface: `serial.rs`, `net.rs` (TCP e base das outras), `telnet.rs`, `ssh.rs`, `adb.rs` |
 | `src/app.rs` | Interface (egui) |
+| `src/ansi.rs` | Cores ANSI no terminal; limpa os outros códigos |
+| `src/echo.rs` | Esconde o eco remoto do que você digitou |
 | `src/icons.rs` | Ícones vetoriais |
 | `src/system.rs` | Lê tema, cor de destaque e fontes do sistema (uma vez, ao iniciar) |
 | `src/theme.rs` | Paleta tingida com a cor de destaque, com contraste mínimo garantido |
